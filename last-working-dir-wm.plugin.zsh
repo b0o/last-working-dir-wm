@@ -17,9 +17,10 @@ typeset -g LWD_AUTO_CD="${LWD_AUTO_CD:-1}"
 	typeset -ga LWD_IGNORE_DIRS
 }
 
+typeset -g _lwd_wmfile_name="wmname"
+
 typeset -g _lwdd_pidfile_name="daemon.pid"
 typeset -g _lwdd_ctlfile_name="daemon.ctl"
-
 
 _lwd_get_wss() {
 	# matches against desktops named following the format: (MONITOR_INDEX)_(WORKSPACE_INDEX):(WORKSPACE_NAME)
@@ -127,8 +128,8 @@ _lwd_write() {
 		echo "$dir" >| "$p"
 	done <<<"$(_lwd_get_file_paths $@)"
 
-	[[ -e "${LWD_RUNTIME_DIR}/lwdd.lock" ]] && {
-		read -r dpid <"${LWD_RUNTIME_DIR}/lwdd.lock"
+	[[ -e "${LWDD_RUNTIME_DIR}/${_lwdd_pidfile_name}" ]] && {
+		read -r dpid <"${LWDD_RUNTIME_DIR}/${_lwdd_pidfile_name}"
 		[[ -z "$dpid" ]] && return
 		kill -USR1 $dpid 2>/dev/null || true
 	}
@@ -162,11 +163,18 @@ _lwd_init_wm() {
 		return 0
 	}
 	local wm
-	if wm="$(wmctrl -m 2>/dev/null)"; then
-		wm="$(gawk 'match($0, /^Name: (\w+)$/, m){ print m[1] }' <<<"$wm")"
-	else
-		wm=""
+	local wmfile="${LWD_RUNTIME_DIR}/${_lwd_wmfile_name}"
+	if [[ -e $wmfile ]]; then
+		read -r wm <$wmfile
 	fi
+	[[ -z "$wm" ]] && {
+		if wm="$(wmctrl -m 2>/dev/null)"; then
+			wm="$(gawk 'match($0, /^Name: (\w+)$/, m){ print m[1] }' <<<"$wm")"
+		else
+			wm=""
+		fi
+		echo $wm >$wmfile
+	}
 	if [[ -n "$wm" ]]; then
 		typeset -g _lwd_wm="$wm"
 
