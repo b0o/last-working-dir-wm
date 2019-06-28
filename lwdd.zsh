@@ -12,7 +12,7 @@ typeset -g  mode="daemon"
 typeset -g  daemon_ctlfile
 typeset -g  daemon_pidfile
 
-typeset -g  daemon_interval=1
+typeset -g  daemon_interval=0.5
 typeset -gA workspaces
 typeset -gA screen_active_ws
 typeset -gA screen_pipes
@@ -20,8 +20,33 @@ typeset -gA screen_pipes
 typeset -g  client_daemon_pid
 typeset -g  client_pidfile
 typeset -g  client_screen
-typeset -g  client_transform='{ print $0 }'
 typeset -g  client_replace=0
+typeset -g  client_wait=0
+typeset -g  client_retry_interval=1
+
+typeset -g  client_transform="print"
+
+client_transform() {
+	[[ -z $client_transform ]] && {
+		cat
+		return
+	}
+	_log "client_transform: '$client_transform'"
+	awk "$client_transform" || {
+		_log "error: client_transform exited with code $?"
+		exit 1
+	}
+}
+
+_log() {
+	[[ -z $logfile ]] && {
+		[[ $quiet -eq 0 ]] && {
+			echo "$*" >&2
+		}
+	} || {
+		echo "$*" >>$logfile
+	}
+}
 
 daemon_setup() {
 	daemon_pidfile="${LWDD_RUNTIME_DIR}/${_lwdd_pidfile_name}"
@@ -281,7 +306,7 @@ client_req_ws() {
 client_loop() {
 	client_req_ws
 	while read -r l <"$client_pipe"; do
-		echo "$l" | awk -c "$client_transform"
+		echo "$l" | client_transform
 	done
 }
 
@@ -334,6 +359,9 @@ while getopts "ql:dc:i:t:wr" opt; do
 		t)
 			client_transform="$OPTARG"
 			;;
+		w)
+			client_wait=1
+			;;
 		r)
 			client_replace=1
 			;;
@@ -371,8 +399,22 @@ elif [[ $mode == "client" ]]; then
 
 	_log "running in client mode"
 	client_setup || {
-		echo "error: setup failed" >&2
-		exit 1
+		client_setup_failure=$?
+		_log "client setup failed"
+		if [[ $client_wait -eq 1 ]]; then
+			while [[ $client_setup_failure -eq 1 ]]; do
+				_log "retrying client_setup in $client_retry_interval second(s)..."
+				sleep $client_retry_interval
+				client_setup || {
+					client_setup_failure=$?
+					continue
+				}
+				break
+			done
+		else
+			_log "error: setup failed"
+			exit 1
+		fi
 	}
 	client_loop || {
 		_log "runtime error"
