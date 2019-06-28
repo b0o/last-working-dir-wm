@@ -4,6 +4,9 @@ sourcedir="$(dirname $0)"
 LWD_AUTO_CD=0
 source "${sourcedir}/last-working-dir-wm.plugin.zsh"
 
+typeset -g  quiet=0
+typeset -g  logfile
+
 typeset -g  mode="daemon"
 
 typeset -g  daemon_ctlfile
@@ -29,23 +32,23 @@ daemon_setup() {
 		[[ -n "$lpid" ]] && {
 			ps --pid="$lpid" &>/dev/null && {
 				daemon_pidfile=""
-				echo "error: lwdd already running (pid=$lpid)" >&2
+				_log "error: lwdd already running (pid=$lpid)"
 				return 1
 			}
 			[[ $1 -ne 1 ]] && {
-				echo "warning: stale pidfile found at '$daemon_pidfile' - cleaning up..." >&2
+				_log "warning: stale pidfile found at '$daemon_pidfile' - cleaning up..."
 				daemon_cleanup
 				daemon_setup 1
 				return $?
 			}
-			echo "error: unexpected file(s) at '$LWDD_RUNTIME_DIR'" >&2
+			_log "error: unexpected file(s) at '$LWDD_RUNTIME_DIR'"
 			return 1
 		}
 	}
 	echo $$ > "$daemon_pidfile"
 
 	mkfifo "$daemon_ctlfile" || {
-		echo "error: unable to create ctlfile at ${daemon_ctlfile}" >&2
+		_log "error: unable to create ctlfile at ${daemon_ctlfile}"
 		return 1
 	}
 
@@ -57,11 +60,11 @@ daemon_setup() {
 			fifo="${LWDD_RUNTIME_DIR}/screen-${screen}"
 			[[ -p "$fifo" ]] || {
 				mkfifo "$fifo" || {
-					echo "error: unable to create FIFO at ${fifo}" >&2
+					_log "error: unable to create FIFO at ${fifo}"
 					return 1
 				}
 			}
-			echo "use fifo '$fifo' for screen '$screen'" >&2
+			_log "use fifo '$fifo' for screen '$screen'"
 			screen_pipes[$screen]="$fifo"
 		}
 	done <<<"$(_lwd_get_wss)"
@@ -74,21 +77,21 @@ daemon_cleanup() {
 		local j=${screen_tx_jobs[$screen]}
 		[[ $j -gt 0 ]] && {
 			kill -KILL $j 2>/dev/null && {
-				echo "killed tx job '$j'" >&2
+				_log "killed tx job '$j'"
 			}
 			unset "screen_tx_jobs[$screen]"
 		}
 		[[ -p $fifo ]] && {
-			echo "unlink '$fifo'" >&2
+			_log "unlink '$fifo'"
 			unlink "$fifo"
 		}
 	done
 	[[ -e "$daemon_ctlfile" ]] && {
-		echo "unlink ctlfile '$daemon_ctlfile'" >&2
+		_log "unlink ctlfile '$daemon_ctlfile'"
 		unlink "$daemon_ctlfile"
 	}
 	[[ -e "$daemon_pidfile" ]] && {
-		echo "unlink pidfile '$daemon_pidfile'" >&2
+		_log "unlink pidfile '$daemon_pidfile'"
 		unlink "$daemon_pidfile"
 	}
 }
@@ -101,13 +104,13 @@ set_active_ws() {
 		l="$1"
 	fi
 	eval "$l"
-	echo "set active ws for screen '$screen' to '$id'" >&2
+	_log "set active ws for screen '$screen' to '$id'"
 	screen_active_ws[$screen]="$id"
 	tx_screen_lwd "$screen"
 }
 
 update_screens() {
-	echo "update screens" >&2
+	_log "update screens"
 	for screen in "${(k)screen_pipes[@]}"; do
 		tx_screen_lwd "$screen"
 	done
@@ -126,11 +129,11 @@ tx_screen_lwd() {
 	integer j
 	j=${screen_tx_jobs[$screen]}
 	[[ $j -gt 0 ]] && {
-		echo "kill write job for screen '$screen' (pid=$j)" >&2
+		_log "kill write job for screen '$screen' (pid=$j)"
 		kill -TERM $j 2>/dev/null
 	}
 
-	echo "tx '$d' > '${screen_pipes[$screen]}'" >&2
+	_log "tx '$d' > '${screen_pipes[$screen]}'"
 	() {
 		echo "$d" > "${screen_pipes[$screen]}"
 		unset "screen_tx_jobs[$screen]"
@@ -164,7 +167,7 @@ daemon_read_ctl() {
 	local l
 	exec {fd}<>"$daemon_ctlfile"
 	read -t 0.01 -u $fd cmd && [[ -n "$cmd" ]] && {
-		echo "rx ctl cmd: '$cmd'" >&2
+		_log "rx ctl cmd: '$cmd'"
 		daemon_parse_ctl "$cmd"
 	}
 	exec {fd}>&-
@@ -178,7 +181,7 @@ daemon_parse_ctl() {
 	if [[ ${#cmd[@]} -eq 2 && ${cmd[1]} == "screen_lwd" ]]; then
 		tx_screen_lwd "${cmd[2]}"
 	else
-		echo "warning: unknown cmd '${cmd[1]}'" >&2
+		_log "warning: unknown cmd '${cmd[1]}'"
 		return 1
 	fi
 }
@@ -195,21 +198,21 @@ client_setup() {
 	daemon_ctlfile="${LWDD_RUNTIME_DIR}/${_lwdd_ctlfile_name}"
 
 	[[ ! -e "$daemon_pidfile" ]] && {
-		echo "error: no lwd daemon is running" >&2
+		_log "error: no lwd daemon is running"
 		return 1
 	}
 	read -r client_daemon_pid <"$daemon_pidfile"
 	ps --pid="$client_daemon_pid" &>/dev/null || {
-		echo "error: lwd daemon daemon_pidfile exists but process not found (pid=$client_daemon_pid)" >&2
+		_log "error: lwd daemon daemon_pidfile exists but process not found (pid=$client_daemon_pid)"
 		return 1
 	}
 	client_pipe="${LWDD_RUNTIME_DIR}/screen-${client_screen}"
 	[[ ! -p "$client_pipe" ]] && {
-		echo "error: unable to connect to lwd daemon client pipe (pid=$client_daemon_pid) at '$client_pipe'" >&2
+		_log "error: unable to connect to lwd daemon client pipe (pid=$client_daemon_pid) at '$client_pipe'"
 		return 1
 	}
 	[[ ! -p "$daemon_ctlfile" ]] && {
-		echo "error: unable to connect to lwd daemon control pipe (pid=$client_daemon_pid) at '$daemon_ctlfile'" >&2
+		_log "error: unable to connect to lwd daemon control pipe (pid=$client_daemon_pid) at '$daemon_ctlfile'"
 		return 1
 	}
 
@@ -221,27 +224,27 @@ client_setup() {
 		if [[ -n "$lpid" ]]; then
 			if ps --pid="$lpid" &>/dev/null; then
 				if [[ $client_replace -eq 1 ]]; then
-					echo "warning: replacing existing lwdd client for screen $client_screen (pid=$lpid)" >&2
+					_log "warning: replacing existing lwdd client for screen $client_screen (pid=$lpid)"
 					kill -TERM $lpid || {
-						echo "error: unable to kill client" >&2
-						return 1
+						_log "error: unable to kill client"
+						return 2
 					}
 					local i=0
 					local timeout=5
 					while ps --pid="$lpid" &>/dev/null; do
 							[[ $i -ge $timeout ]] && {
-								echo "error: timed out trying to replace client $lpid" >&2
+								_log "error: timed out trying to replace client $lpid"
 								return 1
 							}
-							echo "waiting for replaced client to die..." >&2
+							_log "waiting for replaced client to die..."
 							sleep 1
 							i=$((i + 1))
 					done
-					echo "successfully replaced client $lpid" >&2
+					_log "successfully replaced client $lpid"
 				else
 					client_pidfile=""
-					echo "error: lwdd client already running for screen $client_screen (pid=$lpid)" >&2
-					return 1
+					_log "error: lwdd client already running for screen $client_screen (pid=$lpid)"
+					return 2
 				fi
 			else
 				stale=1
@@ -250,7 +253,7 @@ client_setup() {
 			stale=1
 		fi
 		[[ $stale -eq 1 ]] && {
-			echo "warning: stale pidfile found at '$client_pidfile' - cleaning up..." >&2
+			_log "warning: stale pidfile found at '$client_pidfile' - cleaning up..."
 			unlink "$client_pidfile" || return 1
 		}
 	}
@@ -260,18 +263,18 @@ client_setup() {
 
 client_cleanup() {
 	[[ -n "$client_pidfile" && -e "$client_pidfile" ]] && {
-		echo "unlink pidfile '$client_pidfile'" >&2
+		_log "unlink pidfile '$client_pidfile'"
 		unlink "$client_pidfile"
 	}
 	[[ -n "$client_pidfile" && -e "$client_pidfile" ]] && {
-		echo "unlink pidfile '$client_pidfile'" >&2
+		_log "unlink pidfile '$client_pidfile'"
 		unlink "$client_pidfile"
 	}
 }
 
 client_req_ws() {
 	local cmd="screen_lwd $client_screen"
-	echo "tx ctl cmd: '$cmd'" >&2
+	_log "tx ctl cmd: '$cmd'"
 	echo "$cmd" >> "$daemon_ctlfile"
 }
 
@@ -284,13 +287,13 @@ client_loop() {
 
 daemon_handle() {
 	local sig="$1"
-	echo "-\nFATAL: caught SIG${sig}" >&2
+	_log "-\nFATAL: caught SIG${sig}"
 	if [[ $sig == "USR1" ]]; then
 		update_screens
 	elif [[ $sig == "USR2" ]]; then
-		echo "warning: SIGUSR2 not implemented" >&2
+		_log "warning: SIGUSR2 not implemented"
 	else
-		echo "Exiting..." >&2
+		_log "Exiting..."
 		daemon_cleanup
 		exit 1
 	fi
@@ -298,19 +301,26 @@ daemon_handle() {
 
 client_handle() {
 	local sig="$1"
-	echo "-\nFATAL: caught SIG${sig}" >&2
-	echo "Exiting..." >&2
+	_log "-\nFATAL: caught SIG${sig}"
+	_log "Exiting..."
 	client_cleanup
 	exit 1
 }
 
 [[ ! -v _lwd_init ]] && {
-	echo "error: lwd is not initialized yet" >&2
+	_log "error: lwd is not initialized yet"
 	exit 1
 }
 
-while getopts "dc:i:t:r" opt; do
+# while getopts "l:dc:i:t:wrT:C:q" opt; do
+while getopts "ql:dc:i:t:wr" opt; do
 	case $opt in
+		q)
+			quiet=1
+			;;
+		l)
+			logfile="$OPTARG"
+			;;
 		d)
 			mode="daemon"
 			;;
@@ -334,9 +344,9 @@ shift $((OPTIND - 1))
 trap "exit 1" INT QUIT TERM ABRT
 
 [[ ! -d "${LWDD_RUNTIME_DIR}" ]] && {
-	echo "make runtime dir '${LWDD_RUNTIME_DIR}'" >&2
+	_log "make runtime dir '${LWDD_RUNTIME_DIR}'"
 	mkdir -p "${LWDD_RUNTIME_DIR}" || {
-		echo "error: unable to create runtime directory at '${LWDD_RUNTIME_DIR}'" >&2
+		_log "error: unable to create runtime directory at '${LWDD_RUNTIME_DIR}'"
 		return 1
 	}
 }
@@ -346,30 +356,30 @@ if [[ $mode == "daemon" ]]; then
 	trap "daemon_handle USR1" USR1
 	trap "daemon_handle USR2" USR2
 
-	echo "running in daemon mode" >&2
+	_log "running in daemon mode"
 	daemon_setup || {
-		echo "error: setup failed" >&2
+		_log "error: setup failed"
 		exit 1
 	}
 	daemon_loop || {
-		echo "runtime error" >&2
+		_log "runtime error"
 		exit 1
 	}
 
 elif [[ $mode == "client" ]]; then
 	trap "client_handle EXIT" EXIT
 
-	echo "running in client mode" >&2
+	_log "running in client mode"
 	client_setup || {
 		echo "error: setup failed" >&2
 		exit 1
 	}
 	client_loop || {
-		echo "runtime error" >&2
+		_log "runtime error"
 		exit 1
 	}
 
 else
-	echo "error: invalid mode '$mode'" >&2
+	_log "error: invalid mode '$mode'"
 	exit 1
 fi
